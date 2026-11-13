@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 """
-"Leviathan Bloom" - a colossal luminous jellyfish rising over a night ocean.
+"Leviathan Bloom" (v3) - a colossal luminous jellyfish rising over a
+night ocean, evolved: a larger, richer bell with radial canal veining,
+three-layer amber gonads and a hot rim light; denser tentacles; a moon
+halo; and a column of shimmering light reflected on the water.
 
 Pure procedural art: every pixel is drawn by this program at run time
 (Python 3.13 standard library only, no network, fully deterministic).
@@ -22,12 +25,12 @@ W = 1024
 H = 1024
 HORIZON = 648          # sea line
 CX = 512               # jellyfish centre x
-BELL_TOP = 148
-BELL_RX = 268
-BELL_RY = 218
-BELL_EQ = BELL_TOP + BELL_RY   # bell equator y (~366)
+BELL_TOP = 126
+BELL_RX = 296
+BELL_RY = 236
+BELL_EQ = BELL_TOP + BELL_RY   # bell equator y (~362)
 
-rng = random.Random(20261112)
+rng = random.Random(20261113)
 
 # ---------------------------------------------------------------- buffers
 img = bytearray(W * H * 3)                 # final RGB image
@@ -156,7 +159,6 @@ def stamp(cx, cy, r, col, alpha):
         for x in range(x0, x1 + 1):
             d = math.hypot(x - cx, y - cy)
             if d < r + 1.0:
-                a = alpha * max(0.0, min(1.0, (r + 1.0 - d) / 2.0 + 0.5 * (d < r)))
                 a = alpha * max(0.0, (r + 1.0 - d) / (r + 1.0)) ** 0.7 if d > r - 1 else alpha
                 blend_px(x, y, col, a)
 
@@ -208,18 +210,24 @@ def ribbon(points, width_fn, color_fn, alpha_fn):
 
 # ---------------------------------------------------------------- scene
 def paint_background():
-    # sky: deep indigo -> teal at the horizon
-    fill_rows(0, HORIZON, (4, 6, 20), (10, 48, 74))
+    # sky: near-black indigo -> teal at the horizon (deeper than v1)
+    fill_rows(0, HORIZON, (2, 4, 16), (8, 44, 70))
     # sea: dark teal -> near black at the bottom
-    fill_rows(HORIZON, H, (8, 40, 58), (2, 6, 14))
+    fill_rows(HORIZON, H, (7, 38, 56), (1, 5, 12))
     # nebula washes
     add_glow(210, 150, 430, (0.16, 0.05, 0.30), 0.50)
     add_glow(850, 110, 380, (0.02, 0.20, 0.26), 0.45)
     add_glow(560, 560, 520, (0.0, 0.22, 0.26), 0.35)   # horizon bloom
+    # pale moon, upper right: halo glow + tight disc + bright core + craters
+    add_glow(842, 126, 120, (0.34, 0.40, 0.48), 0.22)
+    soft_ellipse(842, 126, 26, 26, (224, 236, 246), 0.80)
+    soft_ellipse(842, 126, 15, 15, (238, 246, 252), 0.55)
+    soft_ellipse(833, 118, 8, 7, (198, 212, 226), 0.35)
+    soft_ellipse(850, 136, 6, 5, (202, 216, 228), 0.28)
 
 
 def paint_stars():
-    for _ in range(300):
+    for _ in range(340):
         x = rng.uniform(0, W)
         y = rng.uniform(0, HORIZON - 30) * rng.uniform(0.25, 1.0)
         a = rng.uniform(0.15, 0.8)
@@ -227,7 +235,7 @@ def paint_stars():
         blend_px(int(x), int(y), col, a)
         if rng.random() < 0.14:
             blend_px(int(x) + 1, int(y), col, a * 0.5)
-    for _ in range(26):  # brighter stars with a cross sparkle
+    for _ in range(30):  # brighter stars with a cross sparkle
         x = rng.uniform(20, W - 20)
         y = rng.uniform(10, HORIZON - 120)
         col = (235, 250, 255)
@@ -246,7 +254,7 @@ def paint_stars():
               (220, 245, 255), 0.55 * (1 - t) ** 1.5)
 
 
-def tentacle_path(x0, length, sway, phase, y0=372.0, step=9.0):
+def tentacle_path(x0, length, sway, phase, y0=374.0, step=9.0):
     pts = []
     n = int(length / step)
     for i in range(n + 1):
@@ -259,22 +267,22 @@ def tentacle_path(x0, length, sway, phase, y0=372.0, step=9.0):
 
 
 def paint_tentacles():
-    # fine thread tentacles first (behind)
-    for k in range(26):
-        x0 = CX + (k - 12.5) * 15.5 + rng.uniform(-5, 5)
-        length = rng.uniform(430, 600)
+    # magenta under-glow where the tentacles leave the bell
+    add_glow(CX, 396, 300, (0.30, 0.10, 0.45), 0.35)
+    # fine thread tentacles first (behind) - denser than v1
+    for k in range(36):
+        x0 = CX + (k - 17.5) * 12.5 + rng.uniform(-5, 5)
+        length = rng.uniform(430, 610)
         pts = tentacle_path(x0, length, rng.uniform(16, 34), rng.uniform(0, 6.28))
-        stroke_path(pts[::2], 1.4, (150, 225, 255), 0.30)
+        stroke_path(pts[::2], 1.5, (150, 225, 255), 0.34)
     # main ribbons
-    mains = []
-    for k in range(10):
-        frac = (k - 4.5) / 4.5
-        x0 = CX + frac * 205
-        length = 560 - abs(frac) * 190 + rng.uniform(-25, 25)
+    for k in range(11):
+        frac = (k - 5) / 5.0
+        x0 = CX + frac * 225
+        length = 580 - abs(frac) * 200 + rng.uniform(-25, 25)
         sway = rng.uniform(22, 46) * (1 if frac >= 0 else -1) * 0.4 + rng.uniform(-8, 8)
         phase = rng.uniform(0, 6.28)
         pts = tentacle_path(x0, length, abs(sway) + 14, phase)
-        mains.append(pts)
         if k % 2 == 0:
             c_top, c_bot = (70, 224, 255), (176, 107, 255)
         else:
@@ -292,10 +300,10 @@ def paint_tentacles():
 
 
 def paint_bell():
-    # halo + core light (into glow buffer)
-    add_glow(CX, 330, 470, (0.10, 0.55, 0.70), 0.85)
-    add_glow(CX, 300, 185, (0.55, 0.95, 1.0), 0.27)
-    add_glow(CX, 470, 320, (0.55, 0.12, 0.55), 0.40)
+    # halo + core light (into glow buffer) - bright, but the heart must read
+    add_glow(CX, 330, 500, (0.10, 0.55, 0.70), 0.85)
+    add_glow(CX, 296, 200, (0.55, 0.95, 1.0), 0.15)
+    add_glow(CX, 480, 330, (0.55, 0.12, 0.55), 0.42)
 
     # dome outline: top arc + scalloped lower margin
     pts = []
@@ -307,8 +315,7 @@ def paint_bell():
     for s in range(scallops):
         for j in range(1, 9):
             t = j / 8
-            x = lerp(pts[-1][0], CX + BELL_RX, (s + t) / scallops) if False else \
-                CX - BELL_RX + 2 * BELL_RX * (s + t) / scallops
+            x = CX - BELL_RX + 2 * BELL_RX * (s + t) / scallops
             y = BELL_EQ + 20 * math.sin(t * math.pi) + 6
             pts.append((x, y))
 
@@ -319,6 +326,11 @@ def paint_bell():
         return lerp3((36, 172, 236), (110, 66, 220), (t - 0.5) * 2)
 
     fill_poly(pts, bell_col, lambda y: 0.94)
+
+    # volumetric shading: violet depth low on both flanks, sheen on top
+    soft_ellipse(CX - 196, 332, 122, 92, (70, 40, 160), 0.10)
+    soft_ellipse(CX + 196, 332, 122, 92, (70, 40, 160), 0.10)
+    soft_ellipse(CX, 188, 150, 70, (255, 255, 255), 0.10)
 
     # inner dome (magenta-violet heart)
     ipts = []
@@ -334,52 +346,88 @@ def paint_bell():
     fill_poly(ipts, lambda y: lerp3((238, 84, 204), (118, 58, 224),
                                     (y - BELL_TOP) / 260), lambda y: 0.52)
 
-    # canopy highlight, upper left (kept faint so the colour shows through)
-    soft_ellipse(CX - 108, 216, 96, 52, (240, 255, 255), 0.15)
+    # radial canals: veins fanning from the heart of the bell to its margin
+    for k in range(15):
+        frac = (k - 7) / 7.0
+        ex = CX + frac * (BELL_RX - 14)
+        ey = BELL_EQ - 10 + 10 * math.sin(abs(frac) * math.pi * 0.5)
+        mx = CX + frac * (BELL_RX * 0.45)
+        my = BELL_TOP + 58
+        sx, sy = CX + frac * 26, BELL_TOP + 116
+        vpts = []
+        for i in range(21):
+            t = i / 20
+            u = 1 - t
+            vpts.append((u * u * sx + 2 * u * t * mx + t * t * ex,
+                         u * u * sy + 2 * u * t * my + t * t * ey))
+        stroke_path(vpts, 3.0, (190, 240, 255), 0.13)
+        stroke_path(vpts, 1.4, (235, 252, 255), 0.16)
 
-    # amber gonad ring (the classic four-lobed organ), drawn on top so it reads;
-    # deep saturated orange so the warm hue survives the cyan glow in composite
-    for (gx, gy, grx, gry) in ((CX - 74, 252, 56, 40), (CX + 74, 252, 56, 40),
-                               (CX - 138, 292, 44, 32), (CX + 138, 292, 44, 32)):
-        soft_ellipse(gx, gy, grx, gry, (250, 106, 22), 0.92)
-        soft_ellipse(gx, gy, grx * 0.55, gry * 0.55, (255, 152, 48), 0.85)
-        add_glow(gx, gy, 90, (0.65, 0.30, 0.04), 0.30)
+    # canopy highlights, upper left
+    soft_ellipse(CX - 112, 208, 98, 54, (240, 255, 255), 0.15)
+    soft_ellipse(CX - 124, 196, 58, 30, (245, 255, 255), 0.16)
+    # faint warm heart-glow behind the gonads (kept low: no blow-out)
+    soft_ellipse(CX, 292, 120, 74, (210, 250, 255), 0.06)
 
-    # rim light along the dome edge
+    # amber gonad ring (four lobes), three gradient layers for real depth;
+    # deep saturated orange so the warm hue survives the cyan glow
+    for (gx, gy, grx, gry) in ((CX - 78, 258, 58, 42), (CX + 78, 258, 58, 42),
+                               (CX - 146, 300, 46, 34), (CX + 146, 300, 46, 34)):
+        soft_ellipse(gx, gy, grx, gry, (232, 76, 10), 0.97)
+        soft_ellipse(gx, gy, grx * 0.62, gry * 0.62, (252, 122, 26), 0.92)
+        soft_ellipse(gx, gy, grx * 0.34, gry * 0.34, (255, 190, 84), 0.90)
+        add_glow(gx, gy, 92, (0.65, 0.30, 0.04), 0.22)
+
+    # rim light along the dome edge: wide halo pass, mid pass, hot core
     rim = [(CX + (BELL_RX + 2) * math.cos(math.pi * i / steps),
             BELL_EQ - (BELL_RY + 2) * math.sin(math.pi * i / steps))
            for i in range(steps + 1)]
-    stroke_path(rim, 13, (64, 200, 245), 0.16)
-    stroke_path(rim, 5, (214, 250, 255), 0.85)
-    # glowing margin line under the bell
+    stroke_path(rim, 15, (64, 200, 245), 0.18)
+    stroke_path(rim, 7, (120, 225, 255), 0.50)
+    stroke_path(rim, 3.5, (235, 253, 255), 0.95)
+    # glowing margin line under the bell (soft halo + hot line)
     marg = [(CX - BELL_RX + 2 * BELL_RX * i / 60,
              BELL_EQ + 20 * abs(math.sin(i / 60 * math.pi * scallops)) * 0.9 + 6)
             for i in range(61)]
-    stroke_path(marg, 4, (255, 120, 225), 0.5)
+    stroke_path(marg, 8, (255, 120, 225), 0.22)
+    stroke_path(marg, 4, (255, 150, 232), 0.60)
 
 
 def paint_oral_arms():
-    for k in range(5):
-        x0 = CX + (k - 2) * 34
+    for k in range(6):
+        x0 = CX + (k - 2.5) * 30
         pts = []
         for i in range(41):
             t = i / 40
-            y = 384 + 250 * t
+            y = 386 + 272 * t
             x = x0 + math.sin(t * 5.2 + k * 1.7) * (10 + 26 * t)
             pts.append((x, y))
         ribbon(pts, lambda t: 24 * (1 - t) + 5,
-               lambda t: lerp3((255, 128, 168), (232, 84, 178), t),
-               lambda t: 0.20)
-        ribbon(pts, lambda t: 10 * (1 - t) + 2,
-               lambda t: lerp3((255, 186, 128), (255, 138, 200), t),
-               lambda t: 0.30)
+               lambda t: lerp3((248, 108, 156), (226, 76, 170), t),
+               lambda t: 0.24)
+        ribbon(pts, lambda t: 11 * (1 - t) + 2.5,
+               lambda t: lerp3((255, 176, 118), (252, 128, 192), t),
+               lambda t: 0.32)
+        ribbon(pts, lambda t: 4 * (1 - t) + 1,
+               lambda t: lerp3((255, 232, 205), (255, 182, 214), t),
+               lambda t: 0.22)
 
 
 def paint_sea_life():
-    # reflection: a soft pool of light under the bell (no hard shapes)
-    soft_ellipse(CX, HORIZON + 26, 310, 64, (30, 160, 190), 0.30)
+    # reflection: a soft pool of light under the bell
+    soft_ellipse(CX, HORIZON + 26, 330, 70, (34, 170, 200), 0.34)
     soft_ellipse(CX, HORIZON + 90, 200, 90, (24, 120, 160), 0.16)
     add_glow(CX, HORIZON + 60, 330, (0.05, 0.35, 0.42), 0.5)
+    # vertical shimmer column: the bell's light poured down the water
+    for _ in range(110):
+        y = rng.uniform(HORIZON + 10, H - 16)
+        depth = (y - HORIZON) / (H - HORIZON)
+        x = CX + (rng.random() + rng.random() - 1.0) * 130 * (0.4 + depth)
+        lh = rng.uniform(14, 46) * (1 - depth * 0.4)
+        a = rng.uniform(0.05, 0.16) * (1 - depth * 0.6)
+        xi, yi = int(x), int(y)
+        for yy in range(yi, min(H - 1, yi + int(lh)), 2):
+            blend_px(xi, yy, (140, 225, 250), a)
     # shimmering light streaks on the water, hugging the glow column
     for _ in range(300):
         y = rng.uniform(HORIZON + 4, H - 8)
@@ -392,11 +440,14 @@ def paint_sea_life():
         xi, yi = int(x), int(y)
         for xx in range(xi, min(W - 1, xi + int(ln))):
             blend_px(xx, yi, col, a)
-    # bioluminescent plankton
-    for _ in range(210):
+    # bioluminescent plankton - more of it, a few with real sparkle
+    for _ in range(300):
         x = rng.uniform(0, W)
         y = rng.uniform(HORIZON + 6, H - 4)
         blend_px(int(x), int(y), (110, 235, 220), rng.uniform(0.15, 0.6))
+    for _ in range(40):
+        stamp(rng.uniform(0, W), rng.uniform(HORIZON + 8, H - 6), 1.3,
+              (150, 245, 230), 0.5)
     # dark rock silhouettes in the lower corners
     fill_poly([(0, H), (0, 948), (70, 922), (150, 938), (205, 972), (230, H)],
               lambda y: (2, 5, 10), lambda y: 0.9)
@@ -424,7 +475,7 @@ def composite():
         for x in range(W):
             gx = x >> 1
             dx = (x - 512) / 512.0
-            v = 1.0 - 0.34 * (dx * dx + dy2)
+            v = 1.0 - 0.38 * (dx * dx + dy2)
             gi = gbase + gx * 3
             i = rowbase + x * 3
             img[i] = clamp((img[i] + glow[gi] * 255) * v)
