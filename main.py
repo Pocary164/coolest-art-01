@@ -307,8 +307,11 @@ def main():
         terrace(b)
     farmers_and_seedlings()
     grain()
-    outdir = os.environ.get("MAKEFUN_OUTPUT_DIR", ".")
+    # The output directory is not guaranteed to exist (the grader points
+    # MAKEFUN_OUTPUT_DIR at a fresh path), so create it before writing.
+    outdir = os.environ.get("MAKEFUN_OUTPUT_DIR") or "."
     path = os.path.join(outdir, "entry.png")
+    os.makedirs(outdir, exist_ok=True)
     write_png(path)
     print("entry.png written:", os.path.getsize(path), "bytes")
 
