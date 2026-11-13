@@ -1,17 +1,11 @@
-#!/usr/bin/env python3
-"""
-"Leviathan Bloom" (v3) - a colossal luminous jellyfish rising over a
-night ocean, evolved: a larger, richer bell with radial canal veining,
-three-layer amber gonads and a hot rim light; denser tentacles; a moon
-halo; and a column of shimmering light reflected on the water.
+"""Menanam Cahaya (Planting Light).
 
-Pure procedural art: every pixel is drawn by this program at run time
-(Python 3.13 standard library only, no network, fully deterministic).
-The image is rendered into an RGB buffer with a small software rasterizer
-(scanline polygon fills, soft ellipses, additive glow accumulated in a
-half-resolution buffer), then written as a PNG with a zlib/struct encoder.
+A giant moon over flooded terraced rice paddies. The terraces mirror the
+sky (Bhuana Agung / Bhuana Alit), and a line of tiny farmers plants
+glowing golden seedlings -- starlight -- into the earth (gotong royong).
 
-Output: $MAKEFUN_OUTPUT_DIR/entry.png  (1024x1024, < 1 MiB)
+Flat ukiyo-e woodblock style. Pure Python stdlib. Deterministic.
+Writes entry.png into $MAKEFUN_OUTPUT_DIR.
 """
 
 import math
@@ -19,503 +13,304 @@ import os
 import random
 import struct
 import zlib
-from array import array
 
-W = 1024
-H = 1024
-HORIZON = 648          # sea line
-CX = 512               # jellyfish centre x
-BELL_TOP = 126
-BELL_RX = 296
-BELL_RY = 236
-BELL_EQ = BELL_TOP + BELL_RY   # bell equator y (~362)
+W = H = 1024
 
+# ---- palette: deep indigo, cream, gold, one red accent -------------------
+INK = (8, 11, 24)
+RIM = (10, 15, 34)
+SKY_BANDS = [(13, 20, 44), (19, 29, 64), (25, 38, 82), (33, 49, 100)]
+RIDGE = (15, 24, 54)
+WATERS = [(41, 60, 110), (47, 67, 120), (54, 76, 130), (62, 86, 142)]
+WATERS_LIGHT = [(58, 78, 128), (64, 85, 138), (71, 94, 148), (79, 104, 158)]
+SKY_MIDS = [(16, 24, 54), (22, 33, 73), (29, 43, 91)]
+CRATER = (226, 208, 168)
+WATER_DARK = (30, 44, 86)
+CREAM = (242, 227, 187)
+CREAM_SOFT = (247, 236, 205)
+CREAM_DIM = (206, 188, 146)
+GOLD = (232, 178, 74)
+GOLD_DEEP = (196, 146, 62)
+GOLD_BRIGHT = (250, 208, 110)
+PALE = (252, 244, 216)
+RED = (190, 58, 44)
+
+buf = bytearray(W * H * 3)
 rng = random.Random(20261113)
 
-# ---------------------------------------------------------------- buffers
-img = bytearray(W * H * 3)                 # final RGB image
-GW, GH = W // 2, H // 2                    # glow buffer resolution
-glow = array("f", bytes(4 * GW * GH * 3))  # additive light, float rgb
+
+# ---- primitives -----------------------------------------------------------
+def hspan(y, x0, x1, c):
+    if y < 0 or y >= H:
+        return
+    if x0 < 0:
+        x0 = 0
+    if x1 > W - 1:
+        x1 = W - 1
+    if x1 < x0:
+        return
+    i = (y * W + x0) * 3
+    buf[i:i + (x1 - x0 + 1) * 3] = bytes(c) * (x1 - x0 + 1)
 
 
-def clamp(v):
-    return 0 if v < 0 else (255 if v > 255 else int(v))
+def rect(x0, y0, x1, y1, c):
+    for y in range(max(0, y0), min(H - 1, y1) + 1):
+        hspan(y, x0, x1, c)
 
 
-def lerp(a, b, t):
-    return a + (b - a) * t
+def disc(cx, cy, r, c):
+    r = int(r)
+    for dy in range(-r, r + 1):
+        hw = int(math.sqrt(max(0, r * r - dy * dy)))
+        hspan(cy + dy, cx - hw, cx + hw, c)
 
 
-def lerp3(c1, c2, t):
-    return (lerp(c1[0], c2[0], t), lerp(c1[1], c2[1], t), lerp(c1[2], c2[2], t))
+def ellipse(cx, cy, rx, ry, c):
+    for dy in range(-ry, ry + 1):
+        t = 1.0 - (dy / ry) ** 2
+        if t < 0:
+            continue
+        hw = int(rx * math.sqrt(t))
+        hspan(cy + dy, cx - hw, cx + hw, c)
 
 
-# ---------------------------------------------------------------- painting
-def blend_px(x, y, col, alpha):
-    """Alpha-blend one pixel of the main image."""
-    if 0 <= x < W and 0 <= y < H and alpha > 0.0:
+def fill_poly(pts, c):
+    ys = [p[1] for p in pts]
+    y0 = max(0, int(min(ys)))
+    y1 = min(H - 1, int(max(ys)))
+    n = len(pts)
+    for y in range(y0, y1 + 1):
+        nodes = []
+        for i in range(n):
+            ax, ay = pts[i]
+            bx, by = pts[(i + 1) % n]
+            if (ay <= y < by) or (by <= y < ay):
+                nodes.append(ax + (y - ay) * (bx - ax) / (by - ay))
+        nodes.sort()
+        for k in range(0, len(nodes) - 1, 2):
+            hspan(y, int(nodes[k]), int(nodes[k + 1]), c)
+
+
+def thick_line(x0, y0, x1, y1, r, c):
+    steps = int(max(abs(x1 - x0), abs(y1 - y0))) + 1
+    for i in range(steps + 1):
+        t = i / steps
+        disc(int(x0 + (x1 - x0) * t), int(y0 + (y1 - y0) * t), r, c)
+
+
+def glow_diamond(cx, cy, r, core=PALE):
+    """Flat layered diamond glow: dim halo -> gold -> bright -> hot core."""
+    layers = [(r, GOLD_DEEP), (max(2, int(r * 0.66)), GOLD),
+              (max(1, int(r * 0.4)), GOLD_BRIGHT), (max(1, int(r * 0.2)), core)]
+    for rr, c in layers:
+        if rr <= 0:
+            continue
+        for dy in range(-rr, rr + 1):
+            hw = rr - abs(dy)
+            hspan(cy + dy, cx - hw, cx + hw, c)
+
+
+def blend_pixel(x, y, target, f):
+    if 0 <= x < W and 0 <= y < H:
         i = (y * W + x) * 3
-        ia = 1.0 - alpha
-        img[i] = clamp(img[i] * ia + col[0] * alpha)
-        img[i + 1] = clamp(img[i + 1] * ia + col[1] * alpha)
-        img[i + 2] = clamp(img[i + 2] * ia + col[2] * alpha)
+        for k in range(3):
+            buf[i + k] = int(buf[i + k] * (1 - f) + target[k] * f)
 
 
-def fill_rows(y0, y1, c_top, c_bot):
-    """Vertical gradient band, whole width (fast slice writes)."""
-    for y in range(y0, y1):
-        t = (y - y0) / max(1, (y1 - y0 - 1))
-        c = lerp3(c_top, c_bot, t)
-        row = bytes((clamp(c[0]), clamp(c[1]), clamp(c[2]))) * W
-        img[y * W * 3:(y + 1) * W * 3] = row
+# ---- scene ----------------------------------------------------------------
+def sky():
+    edges = [0, 150, 300, 450, 612]
+    for i, c in enumerate(SKY_BANDS):
+        rect(0, edges[i], W - 1, edges[i + 1] - 1, c)
+    for i, c in enumerate(SKY_MIDS):  # bokashi-style softened band edges
+        rect(0, edges[i + 1] - 6, W - 1, edges[i + 1] + 5, c)
 
 
-def add_glow(cx, cy, radius, col, peak):
-    """Add a soft radial light into the half-res glow buffer."""
-    gx, gy, gr = cx * 0.5, cy * 0.5, radius * 0.5
-    r2 = gr * gr
-    x0 = max(0, int(gx - gr)); x1 = min(GW - 1, int(gx + gr))
-    y0 = max(0, int(gy - gr)); y1 = min(GH - 1, int(gy + gr))
-    cr, cg, cb = col
-    for y in range(y0, y1 + 1):
-        dy = y - gy
-        dy2 = dy * dy
-        base = y * GW * 3
-        for x in range(x0, x1 + 1):
-            dx = x - gx
-            d2 = dx * dx + dy2
-            if d2 < r2:
-                f = 1.0 - d2 / r2
-                f = f * f * peak
-                i = base + x * 3
-                glow[i] += cr * f
-                glow[i + 1] += cg * f
-                glow[i + 2] += cb * f
-
-
-def fill_poly(points, color_fn, alpha_fn=None):
-    """Scanline polygon fill. color_fn(y)->(r,g,b); alpha_fn(y)->0..1."""
-    ys = [p[1] for p in points]
-    y_lo = max(0, int(min(ys)))
-    y_hi = min(H - 1, int(max(ys)))
-    n = len(points)
-    edges = []
-    for i in range(n):
-        x1, y1 = points[i]
-        x2, y2 = points[(i + 1) % n]
-        if y1 != y2:
-            edges.append((y1, y2, x1, (x2 - x1) / (y2 - y1)))
-    for y in range(y_lo, y_hi + 1):
-        yc = y + 0.5
-        xs = []
-        for (y1, y2, x1, slope) in edges:
-            if (y1 <= yc < y2) or (y2 <= yc < y1):
-                xs.append(x1 + (yc - y1) * slope)
-        if len(xs) < 2:
+def stars():
+    for _ in range(250):
+        x = rng.randrange(6, W - 6)
+        y = rng.randrange(6, 585)
+        dx, dy = x - 512, y - 318
+        if dx * dx + dy * dy < 252 * 252:
             continue
-        xs.sort()
-        col = color_fn(y)
-        alpha = 0.9 if alpha_fn is None else alpha_fn(y)
-        if alpha <= 0.0:
+        c = (CREAM, CREAM_DIM, GOLD_BRIGHT)[rng.randrange(3)]
+        s = rng.randrange(1, 4)
+        rect(x, y, x + s - 1, y + s - 1, c)
+    for _ in range(16):  # sparkle stars: small plus signs
+        x = rng.randrange(20, W - 20)
+        y = rng.randrange(16, 560)
+        dx, dy = x - 512, y - 318
+        if dx * dx + dy * dy < 258 * 258:
             continue
-        ia = 1.0 - alpha
-        r, g, b = col
-        rowbase = y * W * 3
-        for k in range(0, len(xs) - 1, 2):
-            xa = max(0, int(math.ceil(xs[k] - 0.5)))
-            xb = min(W - 1, int(math.floor(xs[k + 1] - 0.5)))
-            for x in range(xa, xb + 1):
-                i = rowbase + x * 3
-                img[i] = clamp(img[i] * ia + r * alpha)
-                img[i + 1] = clamp(img[i + 1] * ia + g * alpha)
-                img[i + 2] = clamp(img[i + 2] * ia + b * alpha)
+        r = rng.choice((4, 5, 6))
+        hspan(y, x - r, x + r, CREAM_SOFT)
+        for d in range(-r, r + 1):
+            blend_pixel(x, y + d, CREAM_SOFT, 0.9)
 
 
-def soft_ellipse(cx, cy, rx, ry, col, alpha):
-    """Filled ellipse with a soft (feathered) edge, alpha blended."""
-    x0 = max(0, int(cx - rx)); x1 = min(W - 1, int(cx + rx))
-    y0 = max(0, int(cy - ry)); y1 = min(H - 1, int(cy + ry))
-    for y in range(y0, y1 + 1):
-        dy = (y - cy) / ry
-        rowbase = y * W * 3
-        for x in range(x0, x1 + 1):
-            dx = (x - cx) / rx
-            q = dx * dx + dy * dy
-            if q < 1.0:
-                a = alpha * (1.0 - q) ** 1.5
-                if a > 0.003:
-                    ia = 1.0 - a
-                    i = rowbase + x * 3
-                    img[i] = clamp(img[i] * ia + col[0] * a)
-                    img[i + 1] = clamp(img[i + 1] * ia + col[1] * a)
-                    img[i + 2] = clamp(img[i + 2] * ia + col[2] * a)
+def moon():
+    disc(512, 318, 240, INK)          # keyblock outline
+    disc(512, 318, 236, GOLD_DEEP)    # gold rim
+    disc(512, 318, 229, CREAM)        # face
+    disc(498, 304, 196, CREAM_SOFT)   # soft inner light, flat offset
+    craters = [(430, 250, 34, 20), (585, 268, 26, 16), (470, 392, 30, 17),
+               (600, 372, 20, 12), (520, 210, 18, 11), (415, 330, 16, 10)]
+    for cx, cy, rx, ry in craters:
+        ellipse(cx, cy, rx, ry, CRATER)
 
 
-def stamp(cx, cy, r, col, alpha):
-    """Small soft disc."""
-    x0 = max(0, int(cx - r - 1)); x1 = min(W - 1, int(cx + r + 1))
-    y0 = max(0, int(cy - r - 1)); y1 = min(H - 1, int(cy + r + 1))
-    for y in range(y0, y1 + 1):
-        for x in range(x0, x1 + 1):
-            d = math.hypot(x - cx, y - cy)
-            if d < r + 1.0:
-                a = alpha * max(0.0, (r + 1.0 - d) / (r + 1.0)) ** 0.7 if d > r - 1 else alpha
-                blend_px(x, y, col, a)
-
-
-def stroke_path(pts, width, col, alpha):
-    """Thick polyline: stamps along the path."""
-    r = width * 0.5
-    for i in range(len(pts) - 1):
-        x1, y1 = pts[i]
-        x2, y2 = pts[i + 1]
-        steps = max(1, int(math.hypot(x2 - x1, y2 - y1) / 1.5))
-        for s in range(steps + 1):
-            t = s / steps
-            stamp(lerp(x1, x2, t), lerp(y1, y2, t), r, col, alpha)
-
-
-def ribbon(points, width_fn, color_fn, alpha_fn):
-    """Filled ribbon along a path; width/color/alpha are functions of t."""
-    left, right = [], []
-    n = len(points)
-    for i in range(n):
-        x, y = points[i]
-        if i == 0:
-            dx, dy = points[1][0] - x, points[1][1] - y
-        elif i == n - 1:
-            dx, dy = x - points[i - 1][0], y - points[i - 1][1]
-        else:
-            dx, dy = points[i + 1][0] - points[i - 1][0], points[i + 1][1] - points[i - 1][1]
-        ln = math.hypot(dx, dy) or 1.0
-        nx, ny = -dy / ln, dx / ln
-        hw = width_fn(i / (n - 1)) * 0.5
-        left.append((x + nx * hw, y + ny * hw))
-        right.append((x - nx * hw, y - ny * hw))
-    poly = left + right[::-1]
-
-    # colour/alpha vary along the path, approximated per scanline via y
-    y_top = points[0][1]
-    y_bot = points[-1][1]
-    span = max(1.0, y_bot - y_top)
-
-    def cfn(y):
-        return color_fn(min(1.0, max(0.0, (y - y_top) / span)))
-
-    def afn(y):
-        return alpha_fn(min(1.0, max(0.0, (y - y_top) / span)))
-
-    fill_poly(poly, cfn, afn)
-
-
-# ---------------------------------------------------------------- scene
-def paint_background():
-    # sky: near-black indigo -> teal at the horizon (deeper than v1)
-    fill_rows(0, HORIZON, (2, 4, 16), (8, 44, 70))
-    # sea: dark teal -> near black at the bottom
-    fill_rows(HORIZON, H, (7, 38, 56), (1, 5, 12))
-    # nebula washes
-    add_glow(210, 150, 430, (0.16, 0.05, 0.30), 0.50)
-    add_glow(850, 110, 380, (0.02, 0.20, 0.26), 0.45)
-    add_glow(560, 560, 520, (0.0, 0.22, 0.26), 0.35)   # horizon bloom
-    # pale moon, upper right: halo glow + tight disc + bright core + craters
-    add_glow(842, 126, 120, (0.34, 0.40, 0.48), 0.22)
-    soft_ellipse(842, 126, 26, 26, (224, 236, 246), 0.80)
-    soft_ellipse(842, 126, 15, 15, (238, 246, 252), 0.55)
-    soft_ellipse(833, 118, 8, 7, (198, 212, 226), 0.35)
-    soft_ellipse(850, 136, 6, 5, (202, 216, 228), 0.28)
-
-
-def paint_stars():
-    for _ in range(340):
-        x = rng.uniform(0, W)
-        y = rng.uniform(0, HORIZON - 30) * rng.uniform(0.25, 1.0)
-        a = rng.uniform(0.15, 0.8)
-        col = (210, 235, 255) if rng.random() < 0.7 else (170, 220, 255)
-        blend_px(int(x), int(y), col, a)
-        if rng.random() < 0.14:
-            blend_px(int(x) + 1, int(y), col, a * 0.5)
-    for _ in range(30):  # brighter stars with a cross sparkle
-        x = rng.uniform(20, W - 20)
-        y = rng.uniform(10, HORIZON - 120)
-        col = (235, 250, 255)
-        stamp(x, y, 1.6, col, 0.9)
-        for d in (2, 3, 4):
-            a = 0.34 - d * 0.07
-            blend_px(int(x) + d, int(y), col, a)
-            blend_px(int(x) - d, int(y), col, a)
-            blend_px(int(x), int(y) + d, col, a)
-            blend_px(int(x), int(y) - d, col, a)
-    # one shooting star, upper left
-    sx, sy = 120.0, 118.0
-    for i in range(46):
-        t = i / 46
-        stamp(sx + i * 3.4, sy + i * 1.35, 2.2 * (1 - t) + 0.4,
-              (220, 245, 255), 0.55 * (1 - t) ** 1.5)
-
-
-def tentacle_path(x0, length, sway, phase, y0=374.0, step=9.0):
+def ridge():
     pts = []
-    n = int(length / step)
-    for i in range(n + 1):
-        t = i / n
-        y = y0 + length * t
-        x = x0 + math.sin(t * 3.1 + phase) * sway * t \
-            + math.sin(t * 7.3 + phase * 2.0) * sway * 0.22 * t
+    for x in range(0, W + 1, 32):
+        y = 566 + int(16 * math.sin(x / W * math.pi * 1.7 + 0.6)) \
+            + int(7 * math.sin(x / W * math.pi * 5.1))
         pts.append((x, y))
-    return pts
+    pts += [(W, 640), (0, 640)]
+    fill_poly(pts, RIDGE)
 
 
-def paint_tentacles():
-    # magenta under-glow where the tentacles leave the bell
-    add_glow(CX, 396, 300, (0.30, 0.10, 0.45), 0.35)
-    # fine thread tentacles first (behind) - denser than v1
-    for k in range(36):
-        x0 = CX + (k - 17.5) * 12.5 + rng.uniform(-5, 5)
-        length = rng.uniform(430, 610)
-        pts = tentacle_path(x0, length, rng.uniform(16, 34), rng.uniform(0, 6.28))
-        stroke_path(pts[::2], 1.5, (150, 225, 255), 0.34)
-    # main ribbons
-    for k in range(11):
-        frac = (k - 5) / 5.0
-        x0 = CX + frac * 225
-        length = 580 - abs(frac) * 200 + rng.uniform(-25, 25)
-        sway = rng.uniform(22, 46) * (1 if frac >= 0 else -1) * 0.4 + rng.uniform(-8, 8)
-        phase = rng.uniform(0, 6.28)
-        pts = tentacle_path(x0, length, abs(sway) + 14, phase)
-        if k % 2 == 0:
-            c_top, c_bot = (70, 224, 255), (176, 107, 255)
+# terrace geometry
+BAND_TOPS = [596, 678, 772, 884]
+BAND_SAGS = [14, 20, 26, 32]
+BAND_RIMS = [7, 8, 10, 12]
+
+
+def top_y(b, x):
+    return BAND_TOPS[b] + int(BAND_SAGS[b] * (1 - (2 * x / W - 1) ** 2))
+
+
+def band_bottom(b, x):
+    if b < 3:
+        return top_y(b + 1, x)
+    return H + 24
+
+
+def terrace(b):
+    top = [(x, top_y(b, x)) for x in range(0, W + 1, 16)]
+    bot = [(x, band_bottom(b, x)) for x in range(W, -1, -16)]
+    fill_poly(top + bot, WATERS[b])
+    rim = [(x, top_y(b, x)) for x in range(0, W + 1, 16)]
+    rim += [(x, top_y(b, x) + BAND_RIMS[b]) for x in range(W, -1, -16)]
+    fill_poly(rim, RIM)
+    off = BAND_RIMS[b] + 15  # inner contour line: gives the band structure
+    con = [(x, top_y(b, x) + off) for x in range(0, W + 1, 16)]
+    con += [(x, top_y(b, x) + off + 3) for x in range(W, -1, -16)]
+    fill_poly(con, WATERS_LIGHT[b])
+    # moon reflection: broken horizontal dashes in a column under the moon
+    half = (130, 165, 205, 250)[b]
+    y = top_y(b, 512) + BAND_RIMS[b] + 12
+    yend = band_bottom(b, 512) - 10
+    row = 0
+    while y < yend:
+        wob = rng.randrange(-14, 15)
+        w = int(half * (0.45 + 0.5 * abs(math.sin(row * 1.7 + b))))
+        c = (CREAM_DIM, GOLD_DEEP, CREAM_DIM, GOLD)[row % 4]
+        hspan(y, 512 + wob - w // 2, 512 + wob + w // 2, c)
+        hspan(y + 1, 512 + wob - w // 3, 512 + wob + w // 3, c)
+        y += rng.choice((10, 12, 13))
+        row += 1
+    # sparse star sparkles on the water
+    for _ in range(14):
+        x = rng.randrange(10, W - 10)
+        yy = top_y(b, x) + BAND_RIMS[b] + rng.randrange(8, 60)
+        if yy < band_bottom(b, x) - 6:
+            rect(x, yy, x + 2, yy, CREAM_DIM)
+
+
+def draw_farmer(x, feet_y, s, sash, flip=1):
+    """Chunky bent planting silhouette; local origin at feet, height ~64*s."""
+    def P(points):
+        return [(x + flip * int(px * s), feet_y + int(py * s)) for px, py in points]
+
+    fill_poly(P([(-7, -24), (-1, -24), (-2, 0), (-9, 0)]), INK)          # back leg
+    fill_poly(P([(0, -24), (7, -24), (14, -9), (11, 0), (5, 0), (6, -12)]), INK)
+    fill_poly(P([(-9, -46), (6, -49), (14, -28), (4, -22), (-7, -27)]), INK)  # torso
+    fill_poly(P([(-6, -39), (10, -41), (12, -34), (-4, -32)]), sash)     # sash
+    disc(x + flip * int(4 * s), feet_y + int(-52 * s), max(3, int(5.5 * s)), INK)
+    fill_poly(P([(-16, -53), (18, -55), (3, -69)]), INK)                 # caping hat
+    fill_poly(P([(-12, -56), (14, -57), (11, -60), (-9, -59)]), GOLD)   # hat band
+    thick_line(x + flip * int(11 * s), feet_y + int(-42 * s),
+               x + flip * int(23 * s), feet_y + int(-15 * s), max(2, int(3 * s)), INK)
+    thick_line(x - flip * int(8 * s), feet_y + int(-40 * s),
+               x - flip * int(16 * s), feet_y + int(-26 * s), max(2, int(3 * s)), INK)
+    # seedling bundle in the back hand: tiny gold diamonds
+    bx, by = x - flip * int(19 * s), feet_y + int(-22 * s)
+    glow_diamond(bx, by, max(3, int(4 * s)))
+    glow_diamond(bx + flip * int(5 * s), by + int(4 * s), max(2, int(3 * s)))
+    # the seedling being planted, glowing at the reaching hand
+    glow_diamond(x + flip * int(25 * s), feet_y + int(-11 * s), max(4, int(6 * s)))
+
+
+def farmers_and_seedlings():
+    b = 2  # farmers work the third terrace
+    # distant neighbours on the upper terraces: gotong royong at every level
+    for bx, bs, bf in [(250, 0.52, 1), (764, 0.48, -1)]:
+        draw_farmer(bx, top_y(1, bx) + BAND_RIMS[1] - 1, bs, GOLD, bf)
+    xs = [168, 302, 436, 566, 700, 838]
+    scales = [1.14, 1.05, 1.2, 1.08, 1.16, 1.03]
+    flips = [1, 1, -1, 1, -1, 1]
+    for x, s, f in zip(xs, scales, flips):
+        feet = top_y(b, x) + BAND_RIMS[b] - 1
+        ellipse(x, top_y(b, x) + 34, 17, 6, WATER_DARK)  # reflection smudge
+        draw_farmer(x, feet, s, RED if x == 436 else GOLD, f)
+    # row of freshly planted glowing seedlings in the water below the rim
+    for gx in range(120, 940, 41):
+        gy = top_y(b, gx) + 52 + int(6 * math.sin(gx / 90.0))
+        glow_diamond(gx, gy, 5)
+        hspan(gy + 9, gx - 6, gx + 6, GOLD_DEEP)       # reflection dash
+        hspan(gy + 13, gx - 3, gx + 3, GOLD_DEEP)
+    # a few older 'star-flowers' already grown in the front terrace
+    for gx, gy, r in [(240, 946, 9), (512, 972, 11), (768, 950, 9), (640, 922, 7)]:
+        glow_diamond(gx, gy, r)
+        hspan(gy + r + 5, gx - r, gx + r, GOLD_DEEP)
+        thick_line(gx, gy + r, gx, gy + r + 10, 2, GOLD_DEEP)
+
+
+def grain():
+    for _ in range(5200):
+        x = rng.randrange(W)
+        y = rng.randrange(H)
+        if rng.random() < 0.5:
+            blend_pixel(x, y, CREAM, 0.13)
         else:
-            c_top, c_bot = (120, 240, 255), (255, 79, 216)
-        w0 = 13 - abs(frac) * 4
-        ribbon(pts, lambda t, w0=w0: w0 * (1 - t) ** 0.8 + 1.2,
-               lambda t, a=c_top, b=c_bot: lerp3(a, b, t),
-               lambda t: 0.22)
-        ribbon(pts, lambda t, w0=w0: w0 * 0.62 * (1 - t) ** 0.8 + 0.8,
-               lambda t, a=c_top, b=c_bot: lerp3(a, b, t),
-               lambda t: 0.38)
-        ribbon(pts, lambda t, w0=w0: w0 * 0.30 * (1 - t) ** 0.8 + 0.4,
-               lambda t, a=c_top, b=c_bot: lerp3((235, 253, 255), b, t),
-               lambda t: 0.75)
+            blend_pixel(x, y, INK, 0.13)
+        if rng.random() < 0.22:
+            blend_pixel(x + 1 if x < W - 1 else x, y, CREAM, 0.07)
 
 
-def paint_bell():
-    # halo + core light (into glow buffer) - bright, but the heart must read
-    add_glow(CX, 330, 500, (0.10, 0.55, 0.70), 0.85)
-    add_glow(CX, 296, 200, (0.55, 0.95, 1.0), 0.15)
-    add_glow(CX, 480, 330, (0.55, 0.12, 0.55), 0.42)
-
-    # dome outline: top arc + scalloped lower margin
-    pts = []
-    steps = 72
-    for i in range(steps + 1):
-        a = math.pi * i / steps            # 0..pi, right -> top -> left
-        pts.append((CX + BELL_RX * math.cos(a), BELL_EQ - BELL_RY * math.sin(a)))
-    scallops = 7
-    for s in range(scallops):
-        for j in range(1, 9):
-            t = j / 8
-            x = CX - BELL_RX + 2 * BELL_RX * (s + t) / scallops
-            y = BELL_EQ + 20 * math.sin(t * math.pi) + 6
-            pts.append((x, y))
-
-    def bell_col(y):
-        t = (y - BELL_TOP) / (BELL_EQ - BELL_TOP + 26)
-        if t < 0.5:
-            return lerp3((168, 238, 255), (36, 172, 236), t * 2)
-        return lerp3((36, 172, 236), (110, 66, 220), (t - 0.5) * 2)
-
-    fill_poly(pts, bell_col, lambda y: 0.94)
-
-    # volumetric shading: violet depth low on both flanks, sheen on top
-    soft_ellipse(CX - 196, 332, 122, 92, (70, 40, 160), 0.10)
-    soft_ellipse(CX + 196, 332, 122, 92, (70, 40, 160), 0.10)
-    soft_ellipse(CX, 188, 150, 70, (255, 255, 255), 0.10)
-
-    # inner dome (magenta-violet heart)
-    ipts = []
-    for i in range(steps + 1):
-        a = math.pi * i / steps
-        ipts.append((CX + BELL_RX * 0.70 * math.cos(a),
-                     BELL_EQ - 6 - BELL_RY * 0.70 * math.sin(a)))
-    for s in range(5):
-        for j in range(1, 7):
-            t = j / 6
-            x = CX - BELL_RX * 0.70 + 2 * BELL_RX * 0.70 * (s + t) / 5
-            ipts.append((x, BELL_EQ - 6 + 12 * math.sin(t * math.pi)))
-    fill_poly(ipts, lambda y: lerp3((238, 84, 204), (118, 58, 224),
-                                    (y - BELL_TOP) / 260), lambda y: 0.52)
-
-    # radial canals: veins fanning from the heart of the bell to its margin
-    for k in range(15):
-        frac = (k - 7) / 7.0
-        ex = CX + frac * (BELL_RX - 14)
-        ey = BELL_EQ - 10 + 10 * math.sin(abs(frac) * math.pi * 0.5)
-        mx = CX + frac * (BELL_RX * 0.45)
-        my = BELL_TOP + 58
-        sx, sy = CX + frac * 26, BELL_TOP + 116
-        vpts = []
-        for i in range(21):
-            t = i / 20
-            u = 1 - t
-            vpts.append((u * u * sx + 2 * u * t * mx + t * t * ex,
-                         u * u * sy + 2 * u * t * my + t * t * ey))
-        stroke_path(vpts, 3.0, (190, 240, 255), 0.13)
-        stroke_path(vpts, 1.4, (235, 252, 255), 0.16)
-
-    # canopy highlights, upper left
-    soft_ellipse(CX - 112, 208, 98, 54, (240, 255, 255), 0.15)
-    soft_ellipse(CX - 124, 196, 58, 30, (245, 255, 255), 0.16)
-    # faint warm heart-glow behind the gonads (kept low: no blow-out)
-    soft_ellipse(CX, 292, 120, 74, (210, 250, 255), 0.06)
-
-    # amber gonad ring (four lobes), three gradient layers for real depth;
-    # deep saturated orange so the warm hue survives the cyan glow
-    for (gx, gy, grx, gry) in ((CX - 78, 258, 58, 42), (CX + 78, 258, 58, 42),
-                               (CX - 146, 300, 46, 34), (CX + 146, 300, 46, 34)):
-        soft_ellipse(gx, gy, grx, gry, (232, 76, 10), 0.97)
-        soft_ellipse(gx, gy, grx * 0.62, gry * 0.62, (252, 122, 26), 0.92)
-        soft_ellipse(gx, gy, grx * 0.34, gry * 0.34, (255, 190, 84), 0.90)
-        add_glow(gx, gy, 92, (0.65, 0.30, 0.04), 0.22)
-
-    # rim light along the dome edge: wide halo pass, mid pass, hot core
-    rim = [(CX + (BELL_RX + 2) * math.cos(math.pi * i / steps),
-            BELL_EQ - (BELL_RY + 2) * math.sin(math.pi * i / steps))
-           for i in range(steps + 1)]
-    stroke_path(rim, 15, (64, 200, 245), 0.18)
-    stroke_path(rim, 7, (120, 225, 255), 0.50)
-    stroke_path(rim, 3.5, (235, 253, 255), 0.95)
-    # glowing margin line under the bell (soft halo + hot line)
-    marg = [(CX - BELL_RX + 2 * BELL_RX * i / 60,
-             BELL_EQ + 20 * abs(math.sin(i / 60 * math.pi * scallops)) * 0.9 + 6)
-            for i in range(61)]
-    stroke_path(marg, 8, (255, 120, 225), 0.22)
-    stroke_path(marg, 4, (255, 150, 232), 0.60)
-
-
-def paint_oral_arms():
-    for k in range(6):
-        x0 = CX + (k - 2.5) * 30
-        pts = []
-        for i in range(41):
-            t = i / 40
-            y = 386 + 272 * t
-            x = x0 + math.sin(t * 5.2 + k * 1.7) * (10 + 26 * t)
-            pts.append((x, y))
-        ribbon(pts, lambda t: 24 * (1 - t) + 5,
-               lambda t: lerp3((248, 108, 156), (226, 76, 170), t),
-               lambda t: 0.24)
-        ribbon(pts, lambda t: 11 * (1 - t) + 2.5,
-               lambda t: lerp3((255, 176, 118), (252, 128, 192), t),
-               lambda t: 0.32)
-        ribbon(pts, lambda t: 4 * (1 - t) + 1,
-               lambda t: lerp3((255, 232, 205), (255, 182, 214), t),
-               lambda t: 0.22)
-
-
-def paint_sea_life():
-    # reflection: a soft pool of light under the bell
-    soft_ellipse(CX, HORIZON + 26, 330, 70, (34, 170, 200), 0.34)
-    soft_ellipse(CX, HORIZON + 90, 200, 90, (24, 120, 160), 0.16)
-    add_glow(CX, HORIZON + 60, 330, (0.05, 0.35, 0.42), 0.5)
-    # vertical shimmer column: the bell's light poured down the water
-    for _ in range(110):
-        y = rng.uniform(HORIZON + 10, H - 16)
-        depth = (y - HORIZON) / (H - HORIZON)
-        x = CX + (rng.random() + rng.random() - 1.0) * 130 * (0.4 + depth)
-        lh = rng.uniform(14, 46) * (1 - depth * 0.4)
-        a = rng.uniform(0.05, 0.16) * (1 - depth * 0.6)
-        xi, yi = int(x), int(y)
-        for yy in range(yi, min(H - 1, yi + int(lh)), 2):
-            blend_px(xi, yy, (140, 225, 250), a)
-    # shimmering light streaks on the water, hugging the glow column
-    for _ in range(300):
-        y = rng.uniform(HORIZON + 4, H - 8)
-        depth = (y - HORIZON) / (H - HORIZON)
-        spread = 250 * (0.30 + depth)
-        x = CX + rng.uniform(-spread, spread)
-        ln = rng.uniform(6, 16 + 52 * (1 - depth))
-        a = rng.uniform(0.04, 0.20) * (1 - depth * 0.75)
-        col = (120, 220, 245) if rng.random() < 0.8 else (230, 150, 235)
-        xi, yi = int(x), int(y)
-        for xx in range(xi, min(W - 1, xi + int(ln))):
-            blend_px(xx, yi, col, a)
-    # bioluminescent plankton - more of it, a few with real sparkle
-    for _ in range(300):
-        x = rng.uniform(0, W)
-        y = rng.uniform(HORIZON + 6, H - 4)
-        blend_px(int(x), int(y), (110, 235, 220), rng.uniform(0.15, 0.6))
-    for _ in range(40):
-        stamp(rng.uniform(0, W), rng.uniform(HORIZON + 8, H - 6), 1.3,
-              (150, 245, 230), 0.5)
-    # dark rock silhouettes in the lower corners
-    fill_poly([(0, H), (0, 948), (70, 922), (150, 938), (205, 972), (230, H)],
-              lambda y: (2, 5, 10), lambda y: 0.9)
-    fill_poly([(W, H), (W, 958), (940, 930), (862, 944), (818, 978), (796, H)],
-              lambda y: (2, 5, 10), lambda y: 0.9)
-    # mist band softening the horizon
-    soft_ellipse(CX, HORIZON, 520, 30, (120, 200, 220), 0.10)
-    soft_ellipse(CX, HORIZON, 330, 16, (170, 230, 245), 0.12)
-    # horizon light line
-    for x in range(70, W - 70):
-        a = 0.22 * (1 - abs(x - CX) / 480)
-        if a > 0:
-            blend_px(x, HORIZON - 1, (150, 230, 250), a)
-            blend_px(x, HORIZON, (150, 230, 250), a * 0.7)
-
-
-def composite():
-    """Add the glow buffer and apply a vignette, one final pass."""
-    for y in range(H):
-        gy = y >> 1
-        dy = (y - 512) / 512.0
-        dy2 = dy * dy
-        rowbase = y * W * 3
-        gbase = gy * GW * 3
-        for x in range(W):
-            gx = x >> 1
-            dx = (x - 512) / 512.0
-            v = 1.0 - 0.38 * (dx * dx + dy2)
-            gi = gbase + gx * 3
-            i = rowbase + x * 3
-            img[i] = clamp((img[i] + glow[gi] * 255) * v)
-            img[i + 1] = clamp((img[i + 1] + glow[gi + 1] * 255) * v)
-            img[i + 2] = clamp((img[i + 2] + glow[gi + 2] * 255) * v)
-
-
-# ---------------------------------------------------------------- PNG out
 def write_png(path):
     raw = bytearray()
+    rowlen = W * 3
     for y in range(H):
-        raw.append(0)  # filter: none
-        raw += img[y * W * 3:(y + 1) * W * 3]
+        raw.append(0)
+        raw += buf[y * rowlen:(y + 1) * rowlen]
     comp = zlib.compress(bytes(raw), 9)
 
-    def chunk(tag, data):
-        return (struct.pack(">I", len(data)) + tag + data +
-                struct.pack(">I", zlib.crc32(tag + data) & 0xFFFFFFFF))
+    def chunk(typ, data):
+        return (struct.pack(">I", len(data)) + typ + data
+                + struct.pack(">I", zlib.crc32(typ + data) & 0xFFFFFFFF))
 
-    png = (b"\x89PNG\r\n\x1a\n" +
-           chunk(b"IHDR", struct.pack(">IIBBBBB", W, H, 8, 2, 0, 0, 0)) +
-           chunk(b"IDAT", comp) +
-           chunk(b"IEND", b""))
-    with open(path, "wb") as f:
-        f.write(png)
-    return len(png)
+    png = b"\x89PNG\r\n\x1a\n"
+    png += chunk(b"IHDR", struct.pack(">IIBBBBB", W, H, 8, 2, 0, 0, 0))
+    png += chunk(b"IDAT", comp)
+    png += chunk(b"IEND", b"")
+    with open(path, "wb") as fh:
+        fh.write(png)
 
 
 def main():
-    paint_background()
-    paint_stars()
-    paint_tentacles()
-    paint_oral_arms()
-    paint_bell()
-    paint_sea_life()
-    composite()
-    out_dir = os.environ.get("MAKEFUN_OUTPUT_DIR") or "/output"
-    os.makedirs(out_dir, exist_ok=True)
-    size = write_png(os.path.join(out_dir, "entry.png"))
-    print("entry.png written:", size, "bytes")
+    sky()
+    stars()
+    moon()
+    ridge()
+    for b in range(4):
+        terrace(b)
+    farmers_and_seedlings()
+    grain()
+    outdir = os.environ.get("MAKEFUN_OUTPUT_DIR", ".")
+    path = os.path.join(outdir, "entry.png")
+    write_png(path)
+    print("entry.png written:", os.path.getsize(path), "bytes")
 
 
 if __name__ == "__main__":
